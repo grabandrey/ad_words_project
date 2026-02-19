@@ -18,6 +18,7 @@ WORKDIR /var/www
 COPY . .
 RUN cp .env.dev .env
 RUN composer install --no-interaction --optimize-autoloader
+RUN php artisan key:generate
 RUN php artisan config:clear
 
 # Copy and setup startup script
