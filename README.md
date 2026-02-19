@@ -75,6 +75,11 @@ Backend API will be available at `http://localhost:8000/api`
 
 Frontend will be available at `http://localhost:5173`
 
+The login credentials are:
+
+#### username: `test@example.com`
+#### password: `parola1234`
+
 ## API Endpoints
 
 ### Campaigns
