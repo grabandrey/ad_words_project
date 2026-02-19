@@ -6,6 +6,7 @@ use App\Models\Campaign;
 use App\Services\CostGenerationService;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Cache;
 
 class GenerateCampaignCosts extends Command
 {
@@ -16,8 +17,8 @@ class GenerateCampaignCosts extends Command
      */
     protected $signature = 'campaign:generate-costs
                             {campaign? : The campaign ID}
-                            {--from= : Start date (Y-m-d)}
-                            {--to= : End date (Y-m-d)}
+                            {--from= : Start datetime (Y-m-d or "Y-m-d H:i:s")}
+                            {--to= : End datetime (Y-m-d or "Y-m-d H:i:s")}
                             {--all : Generate for all campaigns}';
 
     /**
@@ -27,24 +28,38 @@ class GenerateCampaignCosts extends Command
      */
     protected $description = 'Generate random costs for AdWords campaigns following budget rules';
 
+    protected const MAX_DAILY_RUNS = 10;
+
     /**
      * Execute the console command.
      */
     public function handle(CostGenerationService $service): int
     {
+        $cacheKey = 'campaign:generate-costs:runs:' . now()->toDateString();
+        $runsToday = (int) Cache::get($cacheKey, 0);
+
+        if ($runsToday >= self::MAX_DAILY_RUNS) {
+            $this->error("Daily limit reached: this command can only run " . self::MAX_DAILY_RUNS . " times per day ({$runsToday} runs used today).");
+            return self::FAILURE;
+        }
+
+        Cache::put($cacheKey, $runsToday + 1, now()->endOfDay());
+
+        $this->info("Run " . ($runsToday + 1) . " of " . self::MAX_DAILY_RUNS . " allowed today.");
+
         $campaignId = $this->argument('campaign');
         $generateAll = $this->option('all');
 
-        // Determine date range
+        // Determine datetime range
         $startDate = $this->option('from')
             ? Carbon::parse($this->option('from'))
-            : Carbon::now()->subMonths(3);
+            : Carbon::now()->subMonths(3)->startOfDay();
 
         $endDate = $this->option('to')
             ? Carbon::parse($this->option('to'))
             : Carbon::now();
 
-        $this->info("Generating costs from {$startDate->toDateString()} to {$endDate->toDateString()}");
+        $this->info("Generating costs from {$startDate->toDateTimeString()} to {$endDate->toDateTimeString()}");
 
         // Determine which campaigns to process
         if ($generateAll) {

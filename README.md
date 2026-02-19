@@ -10,8 +10,8 @@ A full-stack application for managing AdWords campaign budgets with intelligent 
 - Automatic budget history tracking
 
 ✅ **Cost Generation Algorithm**
-- Generates 1-10 random costs per day
-- Rule 1: Daily cumulated cost ≤ 2x current budget at generation time
+- Generates 1-10 random costs per day (or within a specific time window)
+- Rule 1: Daily cumulated cost ≤ 2x the budget active on that specific day (resolved from budget history)
 - Rule 2: Monthly cumulated cost ≤ sum of max daily budgets for each day
 
 ✅ **Data Visualization**
@@ -74,6 +74,8 @@ php artisan migrate:fresh --seed
 ```bash
 php artisan campaign:generate-costs --all --from=2025-11-19 --to=2026-02-19
 ```
+
+> Both `--from` and `--to` accept a date (`Y-m-d`) or a full datetime (`"Y-m-d H:i:s"`), allowing you to target a specific time window within a single day.
 
 7. Start the server:
 ```bash
@@ -146,25 +148,31 @@ Run the cost generator to populate with realistic data following all business ru
 ## Artisan Commands
 
 ```bash
-# Generate costs for all campaigns
+# Generate costs for all campaigns (date range)
 php artisan campaign:generate-costs --all --from=2025-11-19 --to=2026-02-19
 
-# Generate costs for specific campaign
+# Generate costs for a specific campaign
 php artisan campaign:generate-costs 1 --from=2025-11-19 --to=2026-02-19
+
+# Generate costs for a specific time window within a single day
+php artisan campaign:generate-costs 1 --from="2026-02-19 09:00:00" --to="2026-02-19 17:00:00"
 
 # View campaigns in database
 php artisan tinker
 >>> App\Models\Campaign::with('budgetHistories')->get()
 ```
 
+The command is rate-limited to **10 runs per day**. Both `--from` and `--to` accept a date (`Y-m-d`) or a full datetime (`"Y-m-d H:i:s"`).
+
 ## Business Rules Implementation
 
 ### Daily Cost Rule
 Each cost generation checks:
-- Current budget at that specific timestamp
-- Daily limit = 2x current budget
+- Budget active at the start of that specific day, resolved from budget history
+- Daily limit = 2x that day's budget
 - Cumulative costs for the day so far
 - Only generates if remaining capacity exists
+- Timestamps are constrained to the requested time window (supports sub-day ranges)
 
 ### Monthly Cost Rule
 Each cost generation verifies:

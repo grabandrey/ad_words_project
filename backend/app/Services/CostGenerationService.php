@@ -22,13 +22,20 @@ class CostGenerationService
     public function generateCostsForPeriod(Campaign $campaign, Carbon $startDate, Carbon $endDate): int
     {
         $totalGenerated = 0;
+
         $budgetHistory = $this->getBudgetHistoryForPeriod($campaign, $startDate, $endDate);
 
         // Iterate through each day in the period
         $period = CarbonPeriod::create($startDate, $endDate);
 
         foreach ($period as $day) {
-            $generated = $this->generateCostsForDay($campaign, $day, $budgetHistory);
+            // Clamp the time window for this day to the overall period bounds
+            $dayFrom = $day->isSameDay($startDate) ? $startDate->copy() : $day->copy()->startOfDay();
+            $dayTo   = $day->isSameDay($endDate)   ? $endDate->copy()   : $day->copy()->endOfDay();
+
+            // Use the budget that was active at the start of this day's window
+            $dayBudget = $this->getBudgetAtTime($budgetHistory, $dayFrom);
+            $generated = $this->generateCostsForDay($campaign, $day, $budgetHistory, $dayBudget, $dayFrom, $dayTo);
             $totalGenerated += $generated;
         }
 
@@ -43,70 +50,64 @@ class CostGenerationService
      * @param Collection $budgetHistory
      * @return int Number of costs generated for the day
      */
-    protected function generateCostsForDay(Campaign $campaign, Carbon $day, Collection $budgetHistory): int
+    protected function generateCostsForDay(Campaign $campaign, Carbon $day, Collection $budgetHistory, float $dayBudget, Carbon $from, Carbon $to): int
     {
         $generated = 0;
 
-        // Check if there's a budget for this day
-        $dayStartBudget = $this->getBudgetAtTime($budgetHistory, $day->copy()->startOfDay());
+        // If no budget for this day, skip (campaign paused or not yet started)
+        if ($dayBudget <= 0) {
+            return 0;
+        }
 
-        if ($dayStartBudget == 0) {
-            return 0; // Campaign paused or no budget
+        // Rule 1: daily cumulative cost cannot exceed 2x the budget active on this day
+        $dailyLimit = $dayBudget * 2;
+
+        // Include any costs already recorded for this day before this run
+        $dailyCumulativeCost = $this->getDailyCumulativeCost($campaign, $day);
+
+        if ($dailyCumulativeCost >= $dailyLimit) {
+            return 0; // Daily limit already reached
         }
 
         // Randomly determine cost generation count (1-10 per day)
         $costCount = rand(1, 10);
 
-        // Generate random timestamps throughout the day
-        $timestamps = $this->generateRandomTimestamps($day, $costCount);
+        // Generate random timestamps within the given time window
+        $timestamps = $this->generateRandomTimestamps($from, $to, $costCount);
 
         // Sort timestamps chronologically
         sort($timestamps);
 
-        $dailyCumulativeCost = 0;
-
         foreach ($timestamps as $timestamp) {
-            // Get budget at this specific timestamp
-            $currentBudget = $this->getBudgetAtTime($budgetHistory, Carbon::parse($timestamp));
-
-            if ($currentBudget == 0) {
-                continue; // Campaign paused at this time
-            }
-
-            // Calculate max allowed cost at this moment (Rule 1: 2x budget)
-            $dailyMaxAtTimestamp = $currentBudget * 2;
-            $remainingDailyCapacity = $dailyMaxAtTimestamp - $dailyCumulativeCost;
+            // Rule 1: remaining daily capacity
+            $remainingDailyCapacity = $dailyLimit - $dailyCumulativeCost;
 
             if ($remainingDailyCapacity <= 0) {
-                continue; // Already hit daily limit
+                break; // Daily limit exhausted, no point continuing
             }
 
-            // Check monthly constraint (Rule 2: sum of max daily budgets)
-            $monthStart = Carbon::parse($timestamp)->startOfMonth();
-            $monthCumulativeCost = $this->getMonthlyCumulativeCost($campaign, $monthStart, Carbon::parse($timestamp));
-            $monthMaxBudget = $this->calculateMonthMaxBudget($budgetHistory, $monthStart, Carbon::parse($timestamp));
+            // Rule 2: check monthly constraint (sum of max daily budgets)
+            $ts = Carbon::parse($timestamp);
+            $monthStart = $ts->copy()->startOfMonth();
+            $monthCumulativeCost = $this->getMonthlyCumulativeCost($campaign, $monthStart, $ts);
+            $monthMaxBudget = $this->calculateMonthMaxBudget($budgetHistory, $monthStart, $ts);
             $remainingMonthlyCapacity = $monthMaxBudget - $monthCumulativeCost;
 
             if ($remainingMonthlyCapacity <= 0) {
-                continue; // Monthly limit reached
+                break; // Monthly limit reached, no point continuing
             }
 
             // Generate cost respecting both constraints
             $maxPossibleCost = min($remainingDailyCapacity, $remainingMonthlyCapacity);
 
-            // Skip if max possible cost is too small
             if ($maxPossibleCost < 0.01) {
-                continue;
+                break;
             }
 
             // Generate random cost (10% to 100% of available capacity)
             $minCost = $maxPossibleCost * 0.1;
-            $costAmount = $minCost + (mt_rand() / mt_getrandmax()) * ($maxPossibleCost - $minCost);
+            $costAmount = round($minCost + (mt_rand() / mt_getrandmax()) * ($maxPossibleCost - $minCost), 2);
 
-            // Round to 2 decimal places
-            $costAmount = round($costAmount, 2);
-
-            // Skip if rounded cost is zero
             if ($costAmount <= 0) {
                 continue;
             }
@@ -116,8 +117,8 @@ class CostGenerationService
                 'campaign_id' => $campaign->id,
                 'amount' => $costAmount,
                 'generated_at' => $timestamp,
-                'budget_at_generation' => $currentBudget,
-                'daily_limit_at_generation' => $dailyMaxAtTimestamp,
+                'budget_at_generation' => $dayBudget,
+                'daily_limit_at_generation' => $dailyLimit,
             ]);
 
             $dailyCumulativeCost += $costAmount;
@@ -167,14 +168,19 @@ class CostGenerationService
             $dayStart = $day->copy()->startOfDay();
             $dayEnd = $day->copy()->endOfDay();
 
-            // Find all budget values active during this day
-            $dayBudgets = $budgetHistory->filter(function ($history) use ($dayEnd) {
-                return Carbon::parse($history->changed_at)->lte($dayEnd);
+            // Budget in effect at the start of this day (last change before the day began)
+            $budgetAtDayStart = $this->getBudgetAtTime($budgetHistory, $dayStart);
+
+            // All budget changes that occurred within this day
+            $changesOnDay = $budgetHistory->filter(function ($history) use ($dayStart, $dayEnd) {
+                $changedAt = Carbon::parse($history->changed_at);
+                return $changedAt->gte($dayStart) && $changedAt->lte($dayEnd);
             })->pluck('new_budget');
 
-            // Get the maximum budget for the day
-            $maxDayBudget = $dayBudgets->isEmpty() ? 0 : $dayBudgets->max();
-            $total += $maxDayBudget;
+            // Max budget for this day: highest value active or set during the day
+            $maxDayBudget = $changesOnDay->prepend($budgetAtDayStart)->max();
+
+            $total += $maxDayBudget ?? 0;
         }
 
         return $total;
@@ -216,18 +222,16 @@ class CostGenerationService
      * @param int $count
      * @return array
      */
-    protected function generateRandomTimestamps(Carbon $day, int $count): array
+    protected function generateRandomTimestamps(Carbon $from, Carbon $to, int $count): array
     {
         $timestamps = [];
-        $dayStart = $day->copy()->startOfDay();
+        $totalSeconds = max(0, (int) $to->diffInSeconds($from));
 
         for ($i = 0; $i < $count; $i++) {
-            $randomSeconds = rand(0, 86399); // seconds in a day
-            $timestamp = $dayStart->copy()->addSeconds($randomSeconds);
-            $timestamps[] = $timestamp->toDateTimeString();
+            $randomSeconds = rand(0, $totalSeconds);
+            $timestamps[] = $from->copy()->addSeconds($randomSeconds)->toDateTimeString();
         }
 
-        // Remove duplicates
         return array_unique($timestamps);
     }
 
