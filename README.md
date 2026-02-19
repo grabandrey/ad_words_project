@@ -25,7 +25,7 @@ A full-stack application for managing AdWords campaign budgets with intelligent 
 ### Backend
 - **Framework:** Laravel 12
 - **Database:** PostgreSQL / SQLite
-- **Language:** PHP 8.2+
+- **Language:** PHP 8.5+
 
 ### Frontend
 - **Framework:** React 19 + TypeScript
@@ -37,69 +37,41 @@ A full-stack application for managing AdWords campaign budgets with intelligent 
 
 ## Getting Started
 
-### Prerequisites
-- PHP 8.2+
-- Composer
-- Node.js 18+
-- PostgreSQL (optional, SQLite works too)
 
-### Backend Setup
-
-1. Navigate to backend directory:
+Fire up the docker containers:
 ```bash
-cd backend
+docker compose up -d
 ```
 
-2. Install dependencies:
+### Run the cost generation command (seed data already present)
+
+Navigate to the backend container:
 ```bash
-composer install
+docker exec -it laravel_app sh
 ```
 
-3. Copy environment file:
-```bash
-cp .env.example .env
-```
+Run the cost generator to populate with realistic data following all business rules.
 
-4. Generate application key:
-```bash
-php artisan key:generate
-```
+## Artisan Commands
 
-5. Run migrations and seed database:
 ```bash
-php artisan migrate:fresh --seed
-```
-
-6. Generate costs for campaigns (3 months):
-```bash
+# Generate costs for all campaigns (date range)
 php artisan campaign:generate-costs --all --from=2025-11-19 --to=2026-02-19
+
+# Generate costs for a specific campaign
+php artisan campaign:generate-costs 1 --from=2025-11-19 --to=2026-02-19
+
+# Generate costs for a specific time window within a single day
+php artisan campaign:generate-costs 1 --from="2026-02-19 09:00:00" --to="2026-02-19 17:00:00"
+
+# View campaigns in database
+php artisan tinker
+>>> App\Models\Campaign::with('budgetHistories')->get()
 ```
 
-> Both `--from` and `--to` accept a date (`Y-m-d`) or a full datetime (`"Y-m-d H:i:s"`), allowing you to target a specific time window within a single day.
-
-7. Start the server:
-```bash
-php artisan serve
-```
+The command is rate-limited to **10 runs per day**. Both `--from` and `--to` accept a date (`Y-m-d`) or a full datetime (`"Y-m-d H:i:s"`).
 
 Backend API will be available at `http://localhost:8000/api`
-
-### Frontend Setup
-
-1. Navigate to frontend directory:
-```bash
-cd frontend
-```
-
-2. Install dependencies:
-```bash
-npm install
-```
-
-3. Start development server:
-```bash
-npm run dev
-```
 
 Frontend will be available at `http://localhost:5173`
 
@@ -143,27 +115,6 @@ The seeder creates 3 test campaigns:
 2. **Dynamic Budget Campaign** - 6 budget changes over 3 months
 3. **Pause/Resume Campaign** - Multiple pause/resume cycles
 
-Run the cost generator to populate with realistic data following all business rules.
-
-## Artisan Commands
-
-```bash
-# Generate costs for all campaigns (date range)
-php artisan campaign:generate-costs --all --from=2025-11-19 --to=2026-02-19
-
-# Generate costs for a specific campaign
-php artisan campaign:generate-costs 1 --from=2025-11-19 --to=2026-02-19
-
-# Generate costs for a specific time window within a single day
-php artisan campaign:generate-costs 1 --from="2026-02-19 09:00:00" --to="2026-02-19 17:00:00"
-
-# View campaigns in database
-php artisan tinker
->>> App\Models\Campaign::with('budgetHistories')->get()
-```
-
-The command is rate-limited to **10 runs per day**. Both `--from` and `--to` accept a date (`Y-m-d`) or a full datetime (`"Y-m-d H:i:s"`).
-
 ## Business Rules Implementation
 
 ### Daily Cost Rule
@@ -206,7 +157,3 @@ ad_words_project/
 │       └── utils/                 # Utility functions
 └── README.md
 ```
-
-## License
-
-MIT

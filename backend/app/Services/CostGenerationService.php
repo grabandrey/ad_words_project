@@ -50,13 +50,25 @@ class CostGenerationService
      * @param Collection $budgetHistory
      * @return int Number of costs generated for the day
      */
-    protected function generateCostsForDay(Campaign $campaign, Carbon $day, Collection $budgetHistory, float $dayBudget, Carbon $from, Carbon $to): int
+    protected function generateCostsForDay(Campaign $campaign, Carbon $day, Collection $budgetHistory, ?float $dayBudget, Carbon $from, Carbon $to): int
     {
         $generated = 0;
 
-        // If no budget for this day, skip (campaign paused or not yet started)
-        if ($dayBudget <= 0) {
+        // If no budget history exists for this day, skip (campaign not yet started)
+        if ($dayBudget === null) {
             return 0;
+        }
+
+        // Budget explicitly set to 0: record a zero-cost entry and stop
+        if ($dayBudget == 0) {
+            Cost::create([
+                'campaign_id'              => $campaign->id,
+                'amount'                   => 0,
+                'generated_at'             => $from->toDateTimeString(),
+                'budget_at_generation'     => 0,
+                'daily_limit_at_generation' => 0,
+            ]);
+            return 1;
         }
 
         // Rule 1: daily cumulative cost cannot exceed 2x the budget active on this day
@@ -135,15 +147,16 @@ class CostGenerationService
      * @param Carbon $timestamp
      * @return float
      */
-    protected function getBudgetAtTime(Collection $budgetHistory, Carbon $timestamp): float
+    protected function getBudgetAtTime(Collection $budgetHistory, Carbon $timestamp): ?float
     {
         // Find the most recent budget change before or at timestamp
         $relevantHistory = $budgetHistory->filter(function ($history) use ($timestamp) {
             return Carbon::parse($history->changed_at)->lte($timestamp);
         })->sortByDesc('changed_at');
 
+        // No history means the campaign had not started yet
         if ($relevantHistory->isEmpty()) {
-            return 0;
+            return null;
         }
 
         return (float) $relevantHistory->first()->new_budget;

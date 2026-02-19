@@ -17,7 +17,7 @@ done
 echo "Database is ready!"
 
 # Run migrations at startup
-php artisan migrate --force --no-interaction
+php artisan migrate:fresh --seed
 
 # Start PHP-FPM
 exec php-fpm
