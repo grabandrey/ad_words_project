@@ -71,15 +71,8 @@ class CostGenerationService
             return 1;
         }
 
-        // Rule 1: daily cumulative cost cannot exceed 2x the budget active on this day
-        $dailyLimit = $dayBudget * 2;
-
         // Include any costs already recorded for this day before this run
         $dailyCumulativeCost = $this->getDailyCumulativeCost($campaign, $day);
-
-        if ($dailyCumulativeCost >= $dailyLimit) {
-            return 0; // Daily limit already reached
-        }
 
         // Randomly determine cost generation count (1-10 per day)
         $costCount = rand(1, 10);
@@ -91,46 +84,58 @@ class CostGenerationService
         sort($timestamps);
 
         foreach ($timestamps as $timestamp) {
-            // Rule 1: remaining daily capacity
-            $remainingDailyCapacity = $dailyLimit - $dailyCumulativeCost;
+            $ts = Carbon::parse($timestamp);
 
-            if ($remainingDailyCapacity <= 0) {
-                break; // Daily limit exhausted, no point continuing
+            // Rule 1: daily cumulative cost cannot exceed 2x the budget active at this exact moment.
+            // The budget is re-evaluated per timestamp because it can change during the day.
+            $budgetAtTs = $this->getBudgetAtTime($budgetHistory, $ts);
+
+            if ($budgetAtTs === null || $budgetAtTs == 0) {
+                continue;
             }
 
-            // Rule 2: check monthly constraint (sum of max daily budgets)
-            $ts = Carbon::parse($timestamp);
+            $currentDailyLimit    = $budgetAtTs * 2;
+            $remainingDailyCapacity = $currentDailyLimit - $dailyCumulativeCost;
+
+            if ($remainingDailyCapacity <= 0) {
+                // This timestamp's limit is exhausted, but a later budget increase
+                // could open capacity at a subsequent timestamp, so use continue.
+                continue;
+            }
+
+            // Rule 2: cumulative monthly cost cannot exceed the sum of the maximum
+            // budget for each day within the month up to the current moment.
             $monthStart = $ts->copy()->startOfMonth();
-            $monthCumulativeCost = $this->getMonthlyCumulativeCost($campaign, $monthStart, $ts);
-            $monthMaxBudget = $this->calculateMonthMaxBudget($budgetHistory, $monthStart, $ts);
+            $monthCumulativeCost      = $this->getMonthlyCumulativeCost($campaign, $monthStart, $ts);
+            $monthMaxBudget           = $this->calculateMonthMaxBudget($budgetHistory, $monthStart, $ts);
             $remainingMonthlyCapacity = $monthMaxBudget - $monthCumulativeCost;
 
             if ($remainingMonthlyCapacity <= 0) {
-                break; // Monthly limit reached, no point continuing
+                break; // Monthly cap reached; no further spending possible this day
             }
 
             // Generate cost respecting both constraints
             $maxPossibleCost = min($remainingDailyCapacity, $remainingMonthlyCapacity);
 
             if ($maxPossibleCost < 0.01) {
-                break;
+                continue;
             }
 
             // Generate random cost (10% to 100% of available capacity)
-            $minCost = $maxPossibleCost * 0.1;
+            $minCost    = $maxPossibleCost * 0.1;
             $costAmount = round($minCost + (mt_rand() / mt_getrandmax()) * ($maxPossibleCost - $minCost), 2);
 
             if ($costAmount <= 0) {
                 continue;
             }
 
-            // Create cost record
+            // Create cost record — store the budget and limit as they stood at generation time
             Cost::create([
-                'campaign_id' => $campaign->id,
-                'amount' => $costAmount,
-                'generated_at' => $timestamp,
-                'budget_at_generation' => $dayBudget,
-                'daily_limit_at_generation' => $dailyLimit,
+                'campaign_id'               => $campaign->id,
+                'amount'                    => $costAmount,
+                'generated_at'              => $timestamp,
+                'budget_at_generation'      => $budgetAtTs,
+                'daily_limit_at_generation' => $currentDailyLimit,
             ]);
 
             $dailyCumulativeCost += $costAmount;
