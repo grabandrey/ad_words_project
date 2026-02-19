@@ -21,5 +21,8 @@ class DatabaseSeeder extends Seeder
             'name' => 'Test User',
             'email' => 'test@example.com',
         ]);
+
+        // Seed campaigns with 3-month budget history
+        $this->call(CampaignSeeder::class);
     }
 }
